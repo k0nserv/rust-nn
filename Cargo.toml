@@ -5,3 +5,4 @@ authors = ["Hugo Tunius <h@tunius.se>"]
 
 [dependencies]
 rand = "^0.5.3"
+csv = "1"
