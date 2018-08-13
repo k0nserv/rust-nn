@@ -1,4 +1,7 @@
 extern crate csv;
+extern crate rand;
+#[macro_use]
+extern crate serde_derive;
 
 
 use std::error::Error;
@@ -67,6 +70,18 @@ macro_rules! matrix {
                 for i in 0..$rows {
                     for j in 0..$columns {
                         result += self[(i, j)];
+                    }
+                }
+
+                result
+            }
+
+            fn abs_sum(&self) -> f32 {
+                let mut result = 0.0;
+
+                for i in 0..$rows {
+                    for j in 0..$columns {
+                        result += self[(i, j)].abs();
                     }
                 }
 
@@ -338,8 +353,8 @@ macro_rules! network {
                         self.w1 = &self.w1 - &(&w1_grad * learning_rate);
                         self.w2 = &self.w2 - &(&w2_grad * learning_rate);
 
-                        let precision = w1_grad.sum() + w2_grad.sum();
-                        if precision < 0.000001 {
+                        let precision = w1_grad.abs_sum() + w2_grad.abs_sum();
+                        if precision < 0.01 {
                             println!("Found desired precision after {} iterations", i + 1);
                             break;
                         }
@@ -398,7 +413,7 @@ macro_rules! network {
 }
 
 
-const NUM_EXAMPLES: usize = 150;
+const NUM_EXAMPLES: usize = 75;
 network!{
     name: my_network,
     input: {
@@ -413,7 +428,15 @@ network!{
     }
 }
 
-extern crate rand;
+#[derive(Debug,Deserialize)]
+struct Example {
+    sepal_length: f32,
+    sepal_width: f32,
+    petal_length: f32,
+    petal_width: f32,
+    class: String,
+}
+
 
 fn class(name: &str) -> [f32; 3] {
     match name {
@@ -424,16 +447,16 @@ fn class(name: &str) -> [f32; 3] {
     }
 }
 
-fn read_data() -> Result<Vec<csv::StringRecord>, Box<Error>> {
+fn read_data() -> Result<Vec<Example>, Box<Error>> {
     let mut builder = csv::ReaderBuilder::new();
     builder.has_headers(false);
     let mut rdr = builder.from_reader(io::stdin());
     let mut result = Vec::new();
 
-    for entry in rdr.records() {
+    for entry in rdr.deserialize() {
         // The iterator yields Result<StringRecord, Error>, so we check the
         // error here..
-        let record = entry?;
+        let record: Example = entry?;
         result.push(record);
     }
 
@@ -441,10 +464,25 @@ fn read_data() -> Result<Vec<csv::StringRecord>, Box<Error>> {
     Ok(result)
 }
 
+fn normalize_by<T, F>(values: &mut [T], get_value: F) where F: FnMut(&mut T) -> &mut f32, {
+    let max = {
+        get_value(values.iter_mut().max_by(|ref mut a, ref mut b| get_value(a).partial_cmp(&get_value(b)).unwrap()).unwrap())
+    };
+    let min = {
+        get_value(values.iter_mut().min_by(|ref mut a, ref mut b| get_value(a).partial_cmp(&get_value(b)).unwrap()).unwrap())
+    };
+
+    values.iter_mut().for_each(|a| {
+        let value = get_value(a);
+        *value = (*value - *min) / (*max - *min);
+    });
+}
+
+
 fn main() -> Result<(), Box<Error>> {
     use rand::{thread_rng, Rng};
     const LAMBDA: f32 = 1.0;
-    const LEARNING_RATE: f32 = 0.01;
+    const LEARNING_RATE: f32 = 0.33;
 
 
     let mut network = my_network::Network::new();
@@ -454,22 +492,24 @@ fn main() -> Result<(), Box<Error>> {
     let mut expected_test_output = my_network::Z3::new();
     let mut raw_data = read_data()?;
     thread_rng().shuffle(&mut raw_data);
+    normalize_by(&mut raw_data, |data| &mut data.sepal_length);
+
 
     for i in 0..NUM_EXAMPLES {
-        input[(i, 0)] = raw_data[i][0].parse::<f32>().unwrap();
-        input[(i, 1)] = raw_data[i][1].parse::<f32>().unwrap();
-        input[(i, 2)] = raw_data[i][2].parse::<f32>().unwrap();
-        input[(i, 3)] = raw_data[i][3].parse::<f32>().unwrap();
-        expected_output[i] = class(&raw_data[i][4]);
+        input[(i, 0)] = raw_data[i].sepal_length;
+        input[(i, 1)] = raw_data[i].sepal_width;
+        input[(i, 2)] = raw_data[i].petal_length;
+        input[(i, 3)] = raw_data[i].petal_width;
+        expected_output[i] = class(&raw_data[i].class);
     }
 
     for i in NUM_EXAMPLES..NUM_EXAMPLES * 2 {
         let normalized_index = i - NUM_EXAMPLES;
-        test_input[(normalized_index, 0)] = raw_data[i][0].parse::<f32>().unwrap();
-        test_input[(normalized_index, 1)] = raw_data[i][1].parse::<f32>().unwrap();
-        test_input[(normalized_index, 2)] = raw_data[i][2].parse::<f32>().unwrap();
-        test_input[(normalized_index, 3)] = raw_data[i][3].parse::<f32>().unwrap();
-        expected_test_output[normalized_index] = class(&raw_data[i][4]);
+        test_input[(normalized_index, 0)] = raw_data[i].sepal_length;
+        test_input[(normalized_index, 1)] = raw_data[i].sepal_width;
+        test_input[(normalized_index, 2)] = raw_data[i].petal_length;
+        test_input[(normalized_index, 3)] = raw_data[i].petal_width;
+        expected_test_output[normalized_index] = class(&raw_data[i].class);
     }
 
     // Before training
